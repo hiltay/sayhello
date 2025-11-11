@@ -11,6 +11,7 @@ and registers it with MacroFlow's tool registry.
 
 import json
 import logging
+import subprocess
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -19,6 +20,9 @@ from src.tools.common import run_command
 from src.tools.registry import register_tool
 
 logger = logging.getLogger(__name__)
+
+# Docker container name (should match tool.mk)
+DOCKER_CONTAINER_NAME = "sayhello_hnet_antibody"
 
 
 def _get_sayhello_dir() -> Path:
@@ -49,6 +53,93 @@ def _run_sayhello_command(cmd: List[str]) -> Dict:
         env_wrapper="uv run",
         check_exists=[sayhello_dir],
     )
+
+
+def _run_docker_command(cmd: List[str], workdir: str = None) -> Dict:
+    """
+    Run command inside Docker container.
+    
+    Args:
+        cmd: Command to run inside container (e.g., ['ls', '/root'])
+        workdir: Working directory for the command (optional)
+        
+    Returns:
+        Dictionary with command execution result
+    """
+    try:
+        # Check if Docker is available
+        docker_check = subprocess.run(
+            ["docker", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if docker_check.returncode != 0:
+            return {
+                "success": False,
+                "error": "Docker is not available",
+                "stdout": "",
+                "stderr": "Docker command not found"
+            }
+        
+        # Check if container exists and is running
+        container_check = subprocess.run(
+            ["docker", "ps", "--format", "{{.Names}}"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        
+        if DOCKER_CONTAINER_NAME not in container_check.stdout:
+            return {
+                "success": False,
+                "error": f"Container {DOCKER_CONTAINER_NAME} is not running",
+                "stdout": "",
+                "stderr": f"Please run 'make prepare-sayhello' to start the container"
+            }
+        
+        # Run command in container
+        docker_cmd = ["docker", "exec"]
+        if workdir:
+            docker_cmd.extend(["-w", workdir])
+        docker_cmd.append(DOCKER_CONTAINER_NAME)
+        docker_cmd.extend(cmd)
+        
+        logger.info(f"Running Docker command: {' '.join(docker_cmd)}")
+        
+        result = subprocess.run(
+            docker_cmd,
+            capture_output=True,
+            text=True,
+            timeout=300  # 5 minutes for deep learning inference
+        )
+        
+        logger.info(f"Docker command returncode: {result.returncode}")
+        logger.info(f"Docker command stdout length: {len(result.stdout)}")
+        logger.info(f"Docker command stderr length: {len(result.stderr)}")
+        
+        return {
+            "success": result.returncode == 0,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "returncode": result.returncode
+        }
+        
+    except subprocess.TimeoutExpired:
+        return {
+            "success": False,
+            "error": "Command timed out",
+            "stdout": "",
+            "stderr": "Docker command execution timed out after 30 seconds"
+        }
+    except Exception as e:
+        logger.error(f"Docker command failed: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "stdout": "",
+            "stderr": str(e)
+        }
 
 
 @register_tool(
@@ -228,101 +319,149 @@ def sayhello_tool(
 
 
 @register_tool(
-    name="sayhello_batch",
+    name="humanness_predict",
     description="""
-    批量 SayHello 工具 - 为多个用户生成问候语。
+    Humanness 预测工具 - 判别蛋白质序列是否为人源。
     
-    参数：
-    - names: 用户名列表（必需）
-    - language: 统一使用的语言（可选，默认 'en'）
+    这个工具使用深度学习模型对蛋白质序列进行人源/非人源判别。
     
-    示例：
-    sayhello_batch(names=["Alice", "Bob", "Charlie"])
-    sayhello_batch(names=["小明", "小红"], language="zh")
+    **参数**：
+    - input_file (str, 必需): 输入 FASTA 文件路径（容器内路径或将自动上传）
+    - output_file (str, 可选): 输出文件路径，默认为 "humanness_results.csv"
+    - checkpoint (str, 可选): 模型检查点路径，默认为 "pretrained_model/humanness.ckpt"
+    - batch_size (int, 可选): 批处理大小，默认为 32
+    - verbose (bool, 可选): 是否显示详细输出，默认为 False
+    
+    **示例**：
+    humanness_predict(input_file="my_sequences.fasta")
+    humanness_predict(input_file="test.fasta", output_file="results.csv", batch_size=64)
+    
+    **返回**：
+    - success: 是否成功
+    - output_file: 输出文件路径
+    - results: 预测结果摘要
+    - stdout: 命令输出
+    - stderr: 错误输出
     """,
-    category="demo",
+    category="bioinformatics",
     metadata={
         "version": "1.0.0",
-        "batch_processing": True,
+        "requires_docker": True,
+        "container_name": DOCKER_CONTAINER_NAME,
+        "model_type": "deep_learning",
+        "task": "humanness_prediction",
     },
 )
-def sayhello_batch_tool(
-    names: list = None,
-    language: str = "en",
+def humanness_predict_tool(
+    input_file: str = None,
+    output_file: str = "humanness_results.csv",
+    checkpoint: str = "pretrained_model/humanness.ckpt",
+    batch_size: int = 32,
+    verbose: bool = False,
     **kwargs,
 ) -> dict:
     """
-    Batch greeting tool.
+    Predict humanness of protein sequences.
     
     Args:
-        names: List of names to greet
-        language: Language for all greetings
-        **kwargs: Additional parameters
+        input_file: Path to input FASTA file (required)
+        output_file: Path to output file (default: "humanness_results.csv")
+        checkpoint: Path to model checkpoint (default: "pretrained_model/humanness.ckpt")
+        batch_size: Batch size for inference (default: 32)
+        verbose: Enable verbose output (default: False)
+        **kwargs: Additional parameters (for compatibility)
         
     Returns:
-        Batch processing results
+        Dictionary containing:
+        - success: Whether the operation succeeded
+        - output_file: Path to output file
+        - results: Summary of prediction results
+        - stdout: Command output
+        - stderr: Error output (if any)
+        - processing_time: Time taken in seconds
     """
     start_time = time.time()
     
-    # 参数别名处理
-    if names is None:
-        names_aliases = [
-            'recipients',      # "recipients": [...]
-            'name_list',       # "name_list": [...]
-            'people',          # "people": [...]
-            'users',           # "users": [...]
-            'targets',         # "targets": [...]
-            'persons',         # "persons": [...]
-        ]
-        for alias in names_aliases:
-            if alias in kwargs:
-                names = kwargs[alias]
-                logger.warning(f"Parameter alias detected: '{alias}' -> 'names'")
-                break
-    
-    if not names or not isinstance(names, list):
+    # 参数验证
+    if input_file is None or not str(input_file).strip():
+        logger.error("Input file parameter is missing or empty")
         return {
             "success": False,
-            "error": "参数 'names' 必须是非空列表",
+            "error": "参数 'input_file' 是必需的。请提供输入 FASTA 文件路径，例如: input_file='sequences.fasta'",
         }
     
-    logger.info(f"Processing batch of {len(names)} names in language '{language}'")
+    input_file = str(input_file).strip()
+    logger.info(f"Humanness prediction tool called with input_file='{input_file}'")
     
-    results = []
-    failed = []
-    
-    for name in names:
+    try:
+        # 构建命令（使用 uv run）
+        cmd_parts = [
+            "uv run python inference_humanness.py",
+            f"-i {input_file}",
+            f"--output {output_file}",
+            f"--checkpoint {checkpoint}",
+            f"--batch-size {batch_size}",
+        ]
+        
+        if verbose:
+            cmd_parts.append("--verbose")
+        
+        command = " ".join(cmd_parts)
+        # 使用 bash -c 执行，通过 workdir 参数设置工作目录
+        cmd_list = ["bash", "-c", command]
+        
+        logger.info(f"Executing humanness prediction: {command}")
+        
+        # 在 Docker 容器中执行命令，设置工作目录为 /root/code
+        result = _run_docker_command(cmd_list, workdir="/root/code")
+        
+        processing_time = time.time() - start_time
+        
+        if not result["success"]:
+            logger.error(f"Humanness prediction failed: {result.get('error', 'Unknown error')}")
+            return {
+                "success": False,
+                "error": result.get("error", "Prediction failed"),
+                "stdout": result.get("stdout", ""),
+                "stderr": result.get("stderr", ""),
+                "input_file": input_file,
+                "container": DOCKER_CONTAINER_NAME,
+                "processing_time": processing_time,
+            }
+        
+        logger.info(f"Humanness prediction completed successfully in {processing_time:.3f}s")
+        
+        # 尝试解析输出文件获取结果摘要
+        results_summary = None
         try:
-            # 调用单个 sayhello_tool（内部使用命令行）
-            result = sayhello_tool(name=name, language=language)
-            
-            if result.get("success"):
-                results.append({
-                    "name": name,
-                    "greeting": result.get("greeting", ""),
-                })
-            else:
-                failed.append({
-                    "name": name,
-                    "error": result.get("error", "Unknown error"),
-                })
+            # 读取输出文件的前几行作为摘要
+            read_cmd = ["sh", "-c", f"head -n 10 {output_file}"]
+            read_result = _run_docker_command(read_cmd, workdir="/root/code")
+            if read_result["success"]:
+                results_summary = read_result["stdout"]
         except Exception as e:
-            logger.error(f"Failed to process name '{name}': {e}")
-            failed.append({
-                "name": name,
-                "error": str(e),
-            })
-    
-    processing_time = time.time() - start_time
-    
-    return {
-        "success": True,
-        "total": len(names),
-        "successful": len(results),
-        "failed": len(failed),
-        "results": results,
-        "failed_items": failed,
-        "language": language,
-        "processing_time": processing_time,
-    }
+            logger.warning(f"Failed to read results summary: {e}")
+        
+        return {
+            "success": True,
+            "output_file": output_file,
+            "input_file": input_file,
+            "results_summary": results_summary,
+            "stdout": result.get("stdout", ""),
+            "stderr": result.get("stderr", ""),
+            "container": DOCKER_CONTAINER_NAME,
+            "processing_time": processing_time,
+            "returncode": result.get("returncode", 0),
+        }
+        
+    except Exception as e:
+        logger.error(f"Humanness prediction tool failed: {e}")
+        processing_time = time.time() - start_time
+        return {
+            "success": False,
+            "error": f"执行失败: {str(e)}",
+            "input_file": input_file,
+            "container": DOCKER_CONTAINER_NAME,
+            "processing_time": processing_time,
+        }
 

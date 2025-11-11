@@ -9,7 +9,7 @@ of how to integrate external tools into MacroFlow.
 """
 
 # Import the MacroFlow integration
-from .macroflow_tool import sayhello_batch_tool, sayhello_tool
+from .macroflow_tool import humanness_predict_tool, sayhello_tool
 
-__all__ = ["sayhello_tool", "sayhello_batch_tool"]
+__all__ = ["sayhello_tool", "humanness_predict_tool"]
 
