@@ -1,6 +1,3 @@
-# Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
-# SPDX-License-Identifier: MIT
-
 """
 SayHello tool package for MacroFlow.
 
@@ -8,8 +5,7 @@ This package provides greeting functionality as a demonstration
 of how to integrate external tools into MacroFlow.
 """
 
-# Import the MacroFlow integration
-from .macroflow_tool import humanness_predict_tool, sayhello_tool
+# Main exports - factory function for MacroFlow toolkit
+from .macroflow_tool import make_tool
 
-__all__ = ["sayhello_tool", "humanness_predict_tool"]
-
+__all__ = ["make_tool"]
