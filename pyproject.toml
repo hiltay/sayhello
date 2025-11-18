@@ -9,9 +9,7 @@ authors = [
 ]
 license = { text = "MIT" }
 
-dependencies = [
-    "socksio>=1.0.0",
-]
+dependencies = []
 
 [project.scripts]
 sayhello = "sayhello.cli:main"
